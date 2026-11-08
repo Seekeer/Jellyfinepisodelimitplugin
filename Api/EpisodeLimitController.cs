@@ -1,17 +1,19 @@
 using System;
-using System.Collections.Concurrent;
 using System.ComponentModel.DataAnnotations;
 using System.Net.Mime;
+using System.Security.Claims;
 using Jellyfin.Plugin.EpisodeLimit.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.EpisodeLimit.Api;
 
 /// <summary>
-/// API controller for Episode Limit plugin.
-/// Allows clients to set/get episode limits per session.
+/// API controller for Episode Limit. v2 keys everything on the authenticated
+/// user, resolved server-side, so no client-supplied device ID can ever split
+/// the limit and the counter into different drawers (the v1 failure mode).
 /// </summary>
 [ApiController]
 [Route("EpisodeLimit")]
@@ -20,17 +22,17 @@ namespace Jellyfin.Plugin.EpisodeLimit.Api;
 public class EpisodeLimitController : ControllerBase
 {
     private readonly PlaybackLimitService _playbackLimitService;
+    private readonly ILogger<EpisodeLimitController> _logger;
 
-    public EpisodeLimitController(PlaybackLimitService playbackLimitService)
+    public EpisodeLimitController(PlaybackLimitService playbackLimitService, ILogger<EpisodeLimitController> logger)
     {
         _playbackLimitService = playbackLimitService;
+        _logger = logger;
     }
 
     /// <summary>
-    /// Set the episode limit for the current session.
+    /// Sets the item limit for the authenticated user.
     /// </summary>
-    /// <param name="request">The limit settings.</param>
-    /// <returns>The updated settings.</returns>
     [HttpPost("SetLimit")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -41,15 +43,13 @@ public class EpisodeLimitController : ControllerBase
             return BadRequest("Limit must be between 0 and 100 (0 = disabled)");
         }
 
-        var deviceId = Request.Headers["X-Emby-Device-Id"].ToString();
-        if (string.IsNullOrEmpty(deviceId))
+        if (!TryGetUserId(out var userId))
         {
-            // Fallback to using a session identifier from auth
-            deviceId = User.FindFirst("Jellyfin-DeviceId")?.Value ?? "unknown";
+            return Problem("Episode Limit 2.0 could not resolve your user from the authentication context. See the server log.");
         }
 
-        var result = _playbackLimitService.SetSessionLimit(deviceId, request.Limit);
-        
+        var result = _playbackLimitService.SetUserLimit(userId, request.Limit);
+
         return Ok(new EpisodeLimitResponse
         {
             Limit = result.Limit,
@@ -59,21 +59,19 @@ public class EpisodeLimitController : ControllerBase
     }
 
     /// <summary>
-    /// Get the current episode limit status for this session.
+    /// Gets the current limit status for the authenticated user.
     /// </summary>
-    /// <returns>Current limit and progress.</returns>
     [HttpGet("Status")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     public ActionResult<EpisodeLimitResponse> GetStatus()
     {
-        var deviceId = Request.Headers["X-Emby-Device-Id"].ToString();
-        if (string.IsNullOrEmpty(deviceId))
+        if (!TryGetUserId(out var userId))
         {
-            deviceId = User.FindFirst("Jellyfin-DeviceId")?.Value ?? "unknown";
+            return Problem("Episode Limit 2.0 could not resolve your user from the authentication context. See the server log.");
         }
 
-        var result = _playbackLimitService.GetSessionStatus(deviceId);
-        
+        var result = _playbackLimitService.GetUserStatus(userId);
+
         return Ok(new EpisodeLimitResponse
         {
             Limit = result.Limit,
@@ -83,21 +81,19 @@ public class EpisodeLimitController : ControllerBase
     }
 
     /// <summary>
-    /// Clear/disable the episode limit for this session.
+    /// Clears the limit for the authenticated user.
     /// </summary>
-    /// <returns>Confirmation.</returns>
     [HttpPost("Clear")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     public ActionResult<EpisodeLimitResponse> ClearLimit()
     {
-        var deviceId = Request.Headers["X-Emby-Device-Id"].ToString();
-        if (string.IsNullOrEmpty(deviceId))
+        if (!TryGetUserId(out var userId))
         {
-            deviceId = User.FindFirst("Jellyfin-DeviceId")?.Value ?? "unknown";
+            return Problem("Episode Limit 2.0 could not resolve your user from the authentication context. See the server log.");
         }
 
-        _playbackLimitService.ClearSessionLimit(deviceId);
-        
+        _playbackLimitService.ClearUserLimit(userId);
+
         return Ok(new EpisodeLimitResponse
         {
             Limit = 0,
@@ -105,37 +101,54 @@ public class EpisodeLimitController : ControllerBase
             IsActive = false
         });
     }
+
+    /// <summary>
+    /// Resolves the user id from the authenticated claims, the same claims
+    /// Jellyfin's own API uses (NameIdentifier, then JWT "sub", then the
+    /// Jellyfin-UserId claim). Never trusts a client-supplied key.
+    /// </summary>
+    private bool TryGetUserId(out Guid userId)
+    {
+        var value = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
+            ?? User.FindFirst("sub")?.Value
+            ?? User.FindFirst("Jellyfin-UserId")?.Value;
+
+        if (Guid.TryParse(value, out userId))
+        {
+            return true;
+        }
+
+        _logger.LogError(
+            "Episode Limit 2.0: could not resolve a user id from the authentication context (value found: {Value}). " +
+            "Limit tracking is disabled until this is resolved.",
+            string.IsNullOrEmpty(value) ? "none" : value);
+        return false;
+    }
 }
 
 /// <summary>
-/// Request to set episode limit.
+/// Request to set the item limit.
 /// </summary>
 public class SetLimitRequest
 {
     /// <summary>
-    /// Number of episodes before stopping (0 = disabled, 1-100 = active).
+    /// Number of items before stopping (0 = disabled, 1-100 = active).
     /// </summary>
     [Range(0, 100)]
     public int Limit { get; set; }
 }
 
 /// <summary>
-/// Response with current episode limit status.
+/// Response with current limit status.
 /// </summary>
 public class EpisodeLimitResponse
 {
-    /// <summary>
-    /// The configured limit (0 = disabled).
-    /// </summary>
+    /// <summary>The configured limit (0 = disabled).</summary>
     public int Limit { get; set; }
 
-    /// <summary>
-    /// Number of episodes played so far in this session.
-    /// </summary>
+    /// <summary>Items completed so far in this run.</summary>
     public int EpisodesPlayed { get; set; }
 
-    /// <summary>
-    /// Whether the limit is currently active.
-    /// </summary>
+    /// <summary>Whether the limit is currently active.</summary>
     public bool IsActive { get; set; }
 }
