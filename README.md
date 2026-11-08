@@ -1,4 +1,4 @@
-# 🌙 Episode Limit Plugin for Jellyfin
+# 🌙 Episode Limit Plugin for Jellyfin 
 
 Stop playback after X episodes — perfect for falling asleep!
 
