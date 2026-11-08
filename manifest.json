@@ -5,6 +5,7 @@
     "overview": "Stop playback after X files - perfect for falling asleep!",
     "description": "Adds a bedtime button to the video player that lets you set how many files to play before automatically stopping. Works with episodes, movies, anything!",
     "owner": "Wavey1975",
+    "imageUrl": "https://raw.githubusercontent.com/Wavey1975/Jellyfinepisodelimitplugin/main/assets/icon.jpg",
     "category": "General",
     "versions": [
       {
