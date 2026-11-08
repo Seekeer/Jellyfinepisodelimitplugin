@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Concurrent;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Session;
 using Microsoft.Extensions.Hosting;
@@ -11,23 +11,25 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.EpisodeLimit.Services;
 
 /// <summary>
-/// Service that monitors playback and stops after the configured number of episodes.
-/// Supports per-session limits set via the player UI.
+/// Counts completed items per user and stops playback once the configured limit is reached.
+/// v2: per-user tracking (v1 keyed on unreliable client device IDs), stop-event
+/// deduplication (the Android app reports every stop twice), accurate item names,
+/// and verified enforcement with retries and loud logging.
 /// </summary>
 public class PlaybackLimitService : IHostedService, IDisposable
 {
+    private const int MaxStopAttempts = 3;
+    private static readonly TimeSpan VerifyDelay = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan DedupWindow = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan StaleArmExpiry = TimeSpan.FromMinutes(30);
+
     private readonly ISessionManager _sessionManager;
     private readonly ILogger<PlaybackLimitService> _logger;
-    
-    // Track limits and counts per device (deviceId -> tracker)
-    private readonly ConcurrentDictionary<string, SessionTracker> _deviceTrackers = new();
-    
-    // Map Jellyfin session IDs to device IDs
-    private readonly ConcurrentDictionary<string, string> _sessionToDevice = new();
 
-    public PlaybackLimitService(
-        ISessionManager sessionManager,
-        ILogger<PlaybackLimitService> logger)
+    // One tracker per user, resolved server-side. One human, one drawer.
+    private readonly ConcurrentDictionary<Guid, UserTracker> _userTrackers = new();
+
+    public PlaybackLimitService(ISessionManager sessionManager, ILogger<PlaybackLimitService> logger)
     {
         _sessionManager = sessionManager;
         _logger = logger;
@@ -38,9 +40,8 @@ public class PlaybackLimitService : IHostedService, IDisposable
     {
         _sessionManager.PlaybackStart += OnPlaybackStart;
         _sessionManager.PlaybackStopped += OnPlaybackStopped;
-        _sessionManager.SessionEnded += OnSessionEnded;
-        
-        _logger.LogInformation("Episode Limit Plugin: Playback monitoring service started");
+
+        _logger.LogInformation("Episode Limit 2.0: playback monitoring started (per-user tracking)");
         return Task.CompletedTask;
     }
 
@@ -49,129 +50,149 @@ public class PlaybackLimitService : IHostedService, IDisposable
     {
         _sessionManager.PlaybackStart -= OnPlaybackStart;
         _sessionManager.PlaybackStopped -= OnPlaybackStopped;
-        _sessionManager.SessionEnded -= OnSessionEnded;
-        
-        _logger.LogInformation("Episode Limit Plugin: Service stopped");
+
+        _logger.LogInformation("Episode Limit 2.0: service stopped");
         return Task.CompletedTask;
     }
 
     /// <summary>
-    /// Set the episode limit for a device/session.
-    /// Called from the API when user sets limit via player UI.
+    /// Sets the item limit for a user. Counting restarts on every new limit.
     /// </summary>
-    public SessionStatus SetSessionLimit(string deviceId, int limit)
+    public SessionStatus SetUserLimit(Guid userId, int limit)
     {
-        var tracker = _deviceTrackers.GetOrAdd(deviceId, _ => new SessionTracker());
-        
+        var tracker = _userTrackers.GetOrAdd(userId, _ => new UserTracker());
+
         tracker.Limit = limit;
         tracker.IsActive = limit > 0;
-        
-        // Reset count when setting a new limit
-        if (limit > 0)
-        {
-            tracker.EpisodesCompleted = 0;
-        }
-        
-        _logger.LogInformation(
-            "Episode Limit: Set limit to {Limit} for device {DeviceId}",
-            limit, deviceId);
-        
-        return new SessionStatus
-        {
-            Limit = tracker.Limit,
-            EpisodesPlayed = tracker.EpisodesCompleted,
-            IsActive = tracker.IsActive
-        };
+        tracker.EpisodesCompleted = 0;
+        tracker.StopArmed = false;
+        tracker.LastCountedItemId = Guid.Empty;
+        tracker.LastCountedAt = DateTime.MinValue;
+        tracker.ArmedAt = DateTime.MinValue;
+
+        _logger.LogInformation("Episode Limit: Set limit to {Limit} for user {UserId}", limit, userId);
+
+        return ToStatus(tracker);
     }
 
     /// <summary>
-    /// Get the current status for a device.
+    /// Gets the current status for a user.
     /// </summary>
-    public SessionStatus GetSessionStatus(string deviceId)
+    public SessionStatus GetUserStatus(Guid userId)
     {
-        if (_deviceTrackers.TryGetValue(deviceId, out var tracker))
-        {
-            return new SessionStatus
-            {
-                Limit = tracker.Limit,
-                EpisodesPlayed = tracker.EpisodesCompleted,
-                IsActive = tracker.IsActive
-            };
-        }
-        
-        return new SessionStatus { Limit = 0, EpisodesPlayed = 0, IsActive = false };
+        return _userTrackers.TryGetValue(userId, out var tracker)
+            ? ToStatus(tracker)
+            : new SessionStatus { Limit = 0, EpisodesPlayed = 0, IsActive = false };
     }
 
     /// <summary>
-    /// Clear the limit for a device.
+    /// Clears the limit for a user.
     /// </summary>
-    public void ClearSessionLimit(string deviceId)
+    public void ClearUserLimit(Guid userId)
     {
-        if (_deviceTrackers.TryGetValue(deviceId, out var tracker))
+        if (_userTrackers.TryGetValue(userId, out var tracker))
         {
             tracker.Limit = 0;
             tracker.IsActive = false;
             tracker.EpisodesCompleted = 0;
-            
-            _logger.LogInformation("Episode Limit: Cleared limit for device {DeviceId}", deviceId);
+            tracker.StopArmed = false;
+            tracker.ArmedAt = DateTime.MinValue;
+
+            _logger.LogInformation("Episode Limit: Cleared limit for user {UserId}", userId);
         }
     }
 
     private void OnPlaybackStart(object? sender, PlaybackProgressEventArgs e)
     {
-        var deviceId = e.Session.DeviceId;
-        var sessionId = e.Session.Id;
+        var userId = e.Session.UserId;
         var itemName = e.Item?.Name ?? "Unknown";
 
-        // Map session to device
-        _sessionToDevice[sessionId] = deviceId;
-
-        if (!_deviceTrackers.TryGetValue(deviceId, out var tracker) || !tracker.IsActive)
+        if (!_userTrackers.TryGetValue(userId, out var tracker) || !tracker.IsActive)
         {
             return;
         }
 
-        tracker.CurrentItemId = e.Item?.Id ?? Guid.Empty;
-        tracker.CurrentItemName = itemName;
-        
         _logger.LogInformation(
-            "Episode Limit: Playing episode {Current}/{Limit} - {ItemName}",
+            "Episode Limit: Playing item {Current}/{Limit} - {ItemName}",
             tracker.EpisodesCompleted + 1, tracker.Limit, itemName);
+
+        if (!tracker.StopArmed)
+        {
+            return;
+        }
+
+        // A limit was reached on the previous item. If the arm is stale
+        // (nothing played for a while, e.g. the user fell asleep and the
+        // client ignored our stop), discard it so it never ambushes a
+        // future session.
+        if (DateTime.UtcNow - tracker.ArmedAt > StaleArmExpiry)
+        {
+            tracker.StopArmed = false;
+            tracker.ArmedAt = DateTime.MinValue;
+            _logger.LogInformation("Episode Limit: Discarded stale armed stop (older than 30 minutes).");
+            return;
+        }
+
+        // Enforce: stop this new session, verify it actually stopped,
+        // retry if ignored. Fire and forget; never block the event thread.
+        _ = EnforceStopAsync(tracker, e.Session.Id, userId, itemName);
     }
 
-    private async void OnPlaybackStopped(object? sender, PlaybackStopEventArgs e)
+    private void OnPlaybackStopped(object? sender, PlaybackStopEventArgs e)
     {
-        var deviceId = e.Session.DeviceId;
-        var sessionId = e.Session.Id;
-        
-        if (!_deviceTrackers.TryGetValue(deviceId, out var tracker) || !tracker.IsActive)
+        var userId = e.Session.UserId;
+
+        if (!_userTrackers.TryGetValue(userId, out var tracker) || !tracker.IsActive)
         {
             return;
         }
 
-        // Check if episode finished naturally
-        if (e.PlayedToCompletion)
+        if (!e.PlayedToCompletion)
         {
-            tracker.EpisodesCompleted++;
-            
+            return;
+        }
+
+        // The Android app reports every stop twice, milliseconds apart
+        // (log evidence, 7-8 November 2026). Count one item once per window.
+        var itemId = e.Item?.Id ?? Guid.Empty;
+        var now = DateTime.UtcNow;
+        if (tracker.LastCountedItemId == itemId && now - tracker.LastCountedAt < DedupWindow)
+        {
+            return;
+        }
+
+        tracker.LastCountedItemId = itemId;
+        tracker.LastCountedAt = now;
+        tracker.EpisodesCompleted++;
+
+        // The name comes from the stop event itself. v1 logged a name
+        // captured at playback start, which was stale or empty.
+        _logger.LogInformation(
+            "Episode Limit: Completed {Completed}/{Limit} - {ItemName}",
+            tracker.EpisodesCompleted, tracker.Limit, e.Item?.Name ?? "Unknown");
+
+        if (tracker.EpisodesCompleted >= tracker.Limit)
+        {
+            tracker.StopArmed = true;
+            tracker.ArmedAt = DateTime.UtcNow;
             _logger.LogInformation(
-                "Episode Limit: Completed {Completed}/{Limit} - {ItemName}",
-                tracker.EpisodesCompleted, tracker.Limit, tracker.CurrentItemName);
+                "Episode Limit: Reached limit of {Limit}! Stop armed for the next item.",
+                tracker.Limit);
+        }
+    }
 
-            // Check if we've hit the limit
-            if (tracker.EpisodesCompleted >= tracker.Limit)
+    private async Task EnforceStopAsync(UserTracker tracker, string sessionId, Guid userId, string itemName)
+    {
+        // Only one enforcement loop per user at a time.
+        if (Interlocked.Exchange(ref tracker.Enforcing, 1) == 1)
+        {
+            return;
+        }
+
+        try
+        {
+            for (var attempt = 1; attempt <= MaxStopAttempts; attempt++)
             {
-                _logger.LogInformation(
-                    "Episode Limit: Reached limit of {Limit}! Stopping playback.",
-                    tracker.Limit);
-
-                // Deactivate the limit (user needs to set it again next time)
-                tracker.IsActive = false;
-                tracker.EpisodesCompleted = 0;
-                
-                // Wait for next episode to start queuing
-                await Task.Delay(2000).ConfigureAwait(false);
-                
                 try
                 {
                     await _sessionManager.SendPlaystateCommand(
@@ -180,46 +201,78 @@ public class PlaybackLimitService : IHostedService, IDisposable
                         new PlaystateRequest
                         {
                             Command = PlaystateCommand.Stop,
-                            ControllingUserId = e.Session.UserId.ToString()
+                            ControllingUserId = userId.ToString()
                         },
                         default).ConfigureAwait(false);
 
-                    _logger.LogInformation("Episode Limit: Stop command sent. Sweet dreams!");
+                    _logger.LogInformation(
+                        "Episode Limit: Stop command sent for {ItemName} (attempt {Attempt}).",
+                        itemName, attempt);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Episode Limit: Failed to stop playback");
+                    _logger.LogError(ex, "Episode Limit: Failed to send stop command (attempt {Attempt})", attempt);
                 }
+
+                await Task.Delay(VerifyDelay).ConfigureAwait(false);
+
+                // Verify: did the client actually obey?
+                var session = _sessionManager.Sessions.FirstOrDefault(s => s.Id == sessionId);
+                if (session == null || session.NowPlayingItem == null)
+                {
+                    tracker.IsActive = false;
+                    tracker.StopArmed = false;
+                    tracker.EpisodesCompleted = 0;
+                    _logger.LogInformation("Episode Limit: Session confirmed stopped. Sweet dreams!");
+                    return;
+                }
+
+                _logger.LogWarning(
+                    "Episode Limit: Client {Client} on {DeviceName} is still playing {Item} after a stop command (attempt {Attempt}). Retrying.",
+                    session.Client, session.DeviceName, session.NowPlayingItem.Name ?? "unknown", attempt);
             }
+
+            // All attempts ignored. Stay armed: the next item gets the same treatment,
+            // and the log keeps the evidence (see Jellysleep issue #43).
+            _logger.LogError(
+                "Episode Limit: {Attempts} stop commands were ignored by this client. It does not honour server-issued stop commands (see Jellysleep issue #43). Staying armed for the next item.",
+                MaxStopAttempts);
+        }
+        finally
+        {
+            tracker.Enforcing = 0;
         }
     }
 
-    private void OnSessionEnded(object? sender, SessionEventArgs e)
+    private static SessionStatus ToStatus(UserTracker tracker)
     {
-        var sessionId = e.SessionInfo.Id;
-        _sessionToDevice.TryRemove(sessionId, out _);
-        
-        // Note: We keep the device tracker so the limit persists if they reconnect
-        _logger.LogDebug("Episode Limit: Session ended {SessionId}", sessionId);
+        return new SessionStatus
+        {
+            Limit = tracker.Limit,
+            EpisodesPlayed = tracker.EpisodesCompleted,
+            IsActive = tracker.IsActive
+        };
     }
 
     /// <inheritdoc />
     public void Dispose()
     {
-        _sessionToDevice.Clear();
-        _deviceTrackers.Clear();
+        _userTrackers.Clear();
     }
 
     /// <summary>
-    /// Tracks state for a device.
+    /// Tracks the limit state for one user.
     /// </summary>
-    private class SessionTracker
+    private class UserTracker
     {
         public int Limit { get; set; }
         public bool IsActive { get; set; }
         public int EpisodesCompleted { get; set; }
-        public Guid CurrentItemId { get; set; }
-        public string CurrentItemName { get; set; } = string.Empty;
+        public bool StopArmed { get; set; }
+        public DateTime ArmedAt { get; set; }
+        public Guid LastCountedItemId { get; set; }
+        public DateTime LastCountedAt { get; set; }
+        public int Enforcing;
     }
 
     /// <summary>
