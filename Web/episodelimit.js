@@ -1,7 +1,12 @@
 /**
- * Episode Limit Plugin - Player UI Integration
- * Adds a timer icon to the video player controls that lets you set
+ * Episode Limit Plugin - Player UI Integration (v2.0.0.1)
+ * Adds a moon button to the video player controls that lets you set
  * how many episodes to play before automatically stopping.
+ *
+ * v2.0.0.1: the popup stays open after you choose a limit and shows the
+ * live timer (press OK to close). Reopening shows the active timer.
+ * Server replies are read robustly, which fixes the popup showing
+ * "Inactive" while a limit was stored on the server.
  */
 (function() {
     'use strict';
@@ -12,6 +17,23 @@
     let isActive = false;
     let statusCheckInterval = null;
 
+    // Read the server's reply, whatever shape it arrives in: a parsed
+    // object or a raw fetch Response, PascalCase or camelCase fields.
+    async function parseResponse(response) {
+        let data = response;
+        if (data && typeof data.json === 'function') {
+            data = await data.json();
+        }
+        if (!data || typeof data !== 'object') {
+            return null;
+        }
+        return {
+            limit: Number(data.Limit !== undefined ? data.Limit : data.limit) || 0,
+            episodesPlayed: Number(data.EpisodesPlayed !== undefined ? data.EpisodesPlayed : data.episodesPlayed) || 0,
+            isActive: Boolean(data.IsActive !== undefined ? data.IsActive : data.isActive)
+        };
+    }
+
     // Create the timer button for the player controls
     function createTimerButton() {
         const button = document.createElement('button');
@@ -19,14 +41,13 @@
         button.className = 'paper-icon-button-light btnEpisodeLimit';
         button.title = 'Episode Limit - Sleep Timer';
         button.setAttribute('is', 'paper-icon-button-light');
-        
-        // Clock/timer icon (SVG)
+
         button.innerHTML = `
             <span class="material-icons episodeLimitIcon" style="font-size: 24px;">bedtime</span>
         `;
-        
+
         button.addEventListener('click', showLimitDialog);
-        
+
         return button;
     }
 
@@ -48,7 +69,7 @@
                 </div>
                 <div class="episodeLimitBody">
                     <p class="episodeLimitDesc">Stop playback after this many episodes:</p>
-                    
+
                     <div class="episodeLimitQuickButtons">
                         <button class="quickBtn" data-value="0">Off</button>
                         <button class="quickBtn" data-value="1">1</button>
@@ -57,23 +78,23 @@
                         <button class="quickBtn" data-value="4">4</button>
                         <button class="quickBtn" data-value="5">5</button>
                     </div>
-                    
+
                     <div class="episodeLimitCustom">
                         <label for="episodeLimitInput">Custom:</label>
                         <input type="number" id="episodeLimitInput" min="1" max="100" value="3" />
                         <button class="customSetBtn" id="episodeLimitCustomSet">Set</button>
                     </div>
-                    
+
                     <div class="episodeLimitStatus" id="episodeLimitStatus">
-                        <!-- Status will be updated dynamically -->
+                        <!-- Status is updated dynamically -->
                     </div>
-                    
+
                     <div class="episodeLimitTimeRef">
                         <small>Counts completed files — works with any length media!</small>
                     </div>
                 </div>
                 <div class="episodeLimitFooter">
-                    <button class="episodeLimitClose" id="episodeLimitClose">Close</button>
+                    <button class="episodeLimitClose" id="episodeLimitClose">OK</button>
                 </div>
             </div>
         `;
@@ -218,12 +239,12 @@
             .episodeLimitClose:hover {
                 background: #444;
             }
-            
+
             /* Button indicator when active */
             .btnEpisodeLimit.limitActive .episodeLimitIcon {
                 color: #4caf50 !important;
             }
-            
+
             #episodeLimitDialog {
                 display: none;
             }
@@ -231,20 +252,22 @@
                 display: block;
             }
         `;
-        
+
         document.head.appendChild(style);
         document.body.appendChild(dialog);
 
         // Event listeners
-        dialog.querySelector('#episodeLimitOverlay').addEventListener('click', hideDialog);
+        // v2.0.0.1: the overlay no longer closes the popup. The popup
+        // stays open so the active timer is always visible; only the OK
+        // button closes it.
         dialog.querySelector('#episodeLimitClose').addEventListener('click', hideDialog);
-        
+
         dialog.querySelectorAll('.quickBtn').forEach(btn => {
             btn.addEventListener('click', function() {
                 setLimit(parseInt(this.dataset.value, 10));
             });
         });
-        
+
         dialog.querySelector('#episodeLimitCustomSet').addEventListener('click', function() {
             const value = parseInt(dialog.querySelector('#episodeLimitInput').value, 10);
             if (value >= 1 && value <= 100) {
@@ -259,13 +282,13 @@
     function showLimitDialog(e) {
         e.preventDefault();
         e.stopPropagation();
-        
+
         const dialog = createDialog();
         dialog.classList.add('visible');
-        
-        // Fetch current status
+
+        // Fetch current status so the popup always shows the live timer
         fetchStatus();
-        
+
         // Pause video interaction while dialog is open
         document.body.style.overflow = 'hidden';
     }
@@ -284,11 +307,11 @@
         const statusEl = document.getElementById('episodeLimitStatus');
         const quickBtns = document.querySelectorAll('.quickBtn');
         const button = document.getElementById('episodeLimitBtn');
-        
+
         if (statusEl) {
             if (isActive && currentLimit > 0) {
                 statusEl.innerHTML = `
-                    <span class="statusActive">● Active</span> - 
+                    <span class="statusActive">● Active</span> -
                     Will stop after <strong>${currentLimit}</strong> episode${currentLimit !== 1 ? 's' : ''}<br>
                     <small>Episodes played: ${episodesPlayed} / ${currentLimit}</small>
                 `;
@@ -296,8 +319,9 @@
                 statusEl.innerHTML = `<span class="statusInactive">● Inactive</span> - Playback will continue indefinitely`;
             }
         }
-        
-        // Update quick button states
+
+        // Update quick button states: the current limit stays highlighted,
+        // Off highlights when nothing is active.
         quickBtns.forEach(btn => {
             const val = parseInt(btn.dataset.value, 10);
             btn.classList.toggle('active', isActive && val === currentLimit);
@@ -305,7 +329,7 @@
                 btn.classList.toggle('active', !isActive || currentLimit === 0);
             }
         });
-        
+
         // Update player button indicator
         if (button) {
             button.classList.toggle('limitActive', isActive && currentLimit > 0);
@@ -319,14 +343,21 @@
                 url: ApiClient.getUrl('EpisodeLimit/Status'),
                 type: 'GET'
             });
-            
-            currentLimit = response.Limit || 0;
-            episodesPlayed = response.EpisodesPlayed || 0;
-            isActive = response.IsActive || false;
-            
+
+            const parsed = await parseResponse(response);
+            if (parsed) {
+                currentLimit = parsed.limit;
+                episodesPlayed = parsed.episodesPlayed;
+                isActive = parsed.isActive;
+            }
+
             updateStatusDisplay();
         } catch (err) {
             console.error('Episode Limit: Failed to fetch status', err);
+            const statusEl = document.getElementById('episodeLimitStatus');
+            if (statusEl) {
+                statusEl.innerHTML = `<span class="statusInactive">⚠ Could not read the timer status from the server. Please try again.</span>`;
+            }
         }
     }
 
@@ -339,21 +370,25 @@
                 data: JSON.stringify({ Limit: limit }),
                 contentType: 'application/json'
             });
-            
-            currentLimit = response.Limit || 0;
-            episodesPlayed = response.EpisodesPlayed || 0;
-            isActive = response.IsActive || false;
-            
+
+            const parsed = await parseResponse(response);
+            if (parsed) {
+                currentLimit = parsed.limit;
+                episodesPlayed = parsed.episodesPlayed;
+                isActive = parsed.isActive;
+            }
+
             updateStatusDisplay();
-            
+
             // Show confirmation
             if (limit > 0) {
                 Dashboard.alert(`Episode limit set to ${limit}. Sweet dreams! 😴`);
             } else {
                 Dashboard.alert('Episode limit disabled.');
             }
-            
-            hideDialog();
+
+            // v2.0.0.1: the popup stays open so the active timer stays
+            // visible. Press OK when you are done.
         } catch (err) {
             console.error('Episode Limit: Failed to set limit', err);
             Dashboard.alert('Failed to set episode limit. Please try again.');
@@ -364,10 +399,10 @@
     function injectButton() {
         // Look for the video OSD (on-screen display) controls
         const osdControls = document.querySelector('.videoOsdBottom .buttons');
-        
+
         if (osdControls && !document.getElementById('episodeLimitBtn')) {
             const button = createTimerButton();
-            
+
             // Insert before the last few buttons (usually fullscreen, etc.)
             const children = osdControls.children;
             if (children.length > 2) {
@@ -375,9 +410,9 @@
             } else {
                 osdControls.appendChild(button);
             }
-            
+
             console.log('Episode Limit: Button injected into player');
-            
+
             // Start status checking while playing
             if (statusCheckInterval) clearInterval(statusCheckInterval);
             statusCheckInterval = setInterval(fetchStatus, 30000); // Check every 30s
@@ -424,7 +459,7 @@
     function init() {
         console.log('Episode Limit: Initializing player UI');
         setupObserver();
-        
+
         // Also try to inject immediately if player is already visible
         if (document.querySelector('.videoOsdBottom')) {
             setTimeout(injectButton, 500);
@@ -443,9 +478,10 @@
     }
 
 })();
+
 // ---- Episode Limit v2: one-time welcome message ----
 // Shows once per browser, the first time v2 becomes active. If you can
-// see this popup, the plugin loaded and the injector worked. Its
+// see this popup, the plugin loaded and the injection worked. Its
 // silence afterwards is a feature, not a bug.
 (function () {
     "use strict";
