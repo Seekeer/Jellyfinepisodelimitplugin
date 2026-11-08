@@ -443,3 +443,56 @@
     }
 
 })();
+// ---- Episode Limit v2: one-time welcome message ----
+// Shows once per browser, the first time v2 becomes active. If you can
+// see this popup, the plugin loaded and the injector worked. Its
+// silence afterwards is a feature, not a bug.
+(function () {
+    "use strict";
+    var FLAG = "episodelimitV2Welcomed";
+    try {
+        if (window.localStorage.getItem(FLAG) === "1") { return; }
+        window.localStorage.setItem(FLAG, "1");
+    } catch (err) {
+        return; // localStorage blocked (private mode): stay quiet
+    }
+
+    function showWelcome() {
+        if (document.getElementById("episodelimit-welcome")) { return; }
+
+        var box = document.createElement("div");
+        box.id = "episodelimit-welcome";
+        box.style.cssText =
+            "position:fixed;bottom:24px;right:24px;z-index:99999;max-width:340px;" +
+            "padding:16px 18px;border-radius:10px;background:#101828;color:#eeeeee;" +
+            "border:1px solid #3a4a5a;font-size:14px;line-height:1.4;" +
+            "box-shadow:0 6px 24px rgba(0,0,0,0.5);";
+
+        var title = document.createElement("div");
+        title.textContent = "🌙 Episode Limit v2 is active";
+        title.style.cssText = "font-weight:600;margin-bottom:6px;";
+
+        var body = document.createElement("div");
+        body.textContent =
+            "Look for the moon button in the player controls to set your bedtime limit.";
+
+        var ok = document.createElement("button");
+        ok.type = "button";
+        ok.textContent = "OK";
+        ok.style.cssText =
+            "margin-top:12px;padding:6px 24px;border:0;border-radius:6px;" +
+            "background:#00a4dc;color:#ffffff;font-size:14px;cursor:pointer;";
+        ok.addEventListener("click", function () { box.remove(); });
+
+        box.appendChild(title);
+        box.appendChild(body);
+        box.appendChild(ok);
+        document.body.appendChild(box);
+    }
+
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", showWelcome);
+    } else {
+        showWelcome();
+    }
+})();
