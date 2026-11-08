@@ -13,7 +13,7 @@
   "changelog": "v2.0.0.1 - the popup now stays open and shows the active timer after you choose a limit (close with OK), reopening the moon always shows the current state so you can cancel, edit or re-set it, server replies are read robustly (fixes the popup showing Inactive while a limit was stored), and the moon button now registers with the JavaScript Injector through its documented plugin interface (2.0.0.0's registration failed silently).",
   "targetAbi": "12.4.0.0",
   "sourceUrl": "https://github.com/Wavey1975/Jellyfinepisodelimitplugin/releases/download/v2.0.0.1/EpisodeLimit-plugin.zip",
-  "checksum": "MD5-OF-THE-NEW-ZIP",
+  "checksum": "a6e185b7dfe02fe42d557e9b0ee4f06a",
   "timestamp": "2026-11-08T15:00:00Z"
       }
     ]
