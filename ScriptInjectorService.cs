@@ -1,26 +1,32 @@
 using System;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.Loader;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Newtonsoft.Json.Linq;
 
 namespace Jellyfin.Plugin.EpisodeLimit.Services;
 
 /// <summary>
-/// v2: registers the player UI script with the JavaScript Injector plugin
-/// (https://github.com/n00bcodr/Jellyfin-JavaScript-Injector) so the moon
-/// button loads in every web client with no index.html patching and no
-/// install.sh. Uses reflection, so there is no compile-time dependency on
-/// the injector. If the injector is not installed, one clear log line says so.
+/// v2.0.0.1: registers the player UI script with the JavaScript Injector plugin
+/// (https://github.com/n00bcodr/Jellyfin-JavaScript-Injector) so the moon button
+/// loads in web clients with no index.html patching. Uses the injector's
+/// documented plugin interface (static PluginInterface.RegisterScript(JObject)),
+/// reached via reflection so there is no compile-time dependency. The payload
+/// asks the injector to load /EpisodeLimit/episodelimit.js, which this plugin
+/// serves anonymously from its own ClientScriptController. Every failure path
+/// logs loudly: the 2.0.0.0 build guessed this API wrong and died silently.
 /// </summary>
 public class ScriptInjectorService : IHostedService
 {
     private const string InjectorAssemblyName = "Jellyfin.Plugin.JavaScriptInjector";
-    private const string InjectorPluginTypeName = "Jellyfin.Plugin.JavaScriptInjector.Plugin";
-    private const string RegistrationServiceTypeName = "Jellyfin.Plugin.JavaScriptInjector.Services.IJavaScriptRegistrationService";
-    private const string PayloadTypeName = "Jellyfin.Plugin.JavaScriptInjector.Model.JavaScriptRegistrationPayload";
+    private const string PluginInterfaceTypeName = "Jellyfin.Plugin.JavaScriptInjector.PluginInterface";
+    private const string ScriptId = "episode-limit-moon-button";
+    private const string ScriptSrc = "/EpisodeLimit/episodelimit.js";
+    private const string PluginId = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
 
     private const int MaxAttempts = 6;
     private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(10);
@@ -45,6 +51,7 @@ public class ScriptInjectorService : IHostedService
     public Task StopAsync(CancellationToken cancellationToken)
     {
         _cts?.Cancel();
+        TryUnregister();
         return Task.CompletedTask;
     }
 
@@ -75,90 +82,131 @@ public class ScriptInjectorService : IHostedService
                     return;
                 }
 
-                // NotReadyYet: the injector is installed but not fully up yet. Wait and retry.
+                if (result == RegistrationResult.Failed)
+                {
+                    return; // The failure has already been logged loudly inside TryRegister.
+                }
+
+                // NotReadyYet: the injector is installed but its plugin instance is
+                // not constructed yet. Wait and retry.
                 await Task.Delay(RetryDelay, ct).ConfigureAwait(false);
             }
 
             _logger.LogError(
-                "Episode Limit 2.0: could not register the UI script with the JavaScript Injector after {Attempts} attempts.",
+                "Episode Limit 2.0: could not register the UI script with the JavaScript Injector after {Attempts} attempts. " +
+                "The injector never became ready.",
                 MaxAttempts);
         }
         catch (OperationCanceledException)
         {
             // Server shutting down, nothing to do.
         }
+        catch (Exception ex)
+        {
+            // Never silent. The 2.0.0.0 build swallowed exactly this and the moon button died quietly.
+            _logger.LogError(ex, "Episode Limit 2.0: unexpected error while registering the UI script with the JavaScript Injector.");
+        }
     }
 
     private RegistrationResult TryRegister()
     {
-        var injectorAssembly = AppDomain.CurrentDomain.GetAssemblies()
-            .FirstOrDefault(a => string.Equals(a.GetName().Name, InjectorAssemblyName, StringComparison.OrdinalIgnoreCase));
-
-        if (injectorAssembly == null)
+        try
         {
-            return RegistrationResult.InjectorMissing;
-        }
+            var injectorAssembly = FindInjectorAssembly();
+            if (injectorAssembly == null)
+            {
+                return RegistrationResult.InjectorMissing;
+            }
 
-        var pluginType = injectorAssembly.GetType(InjectorPluginTypeName, throwOnError: false);
-        var instance = pluginType?.GetProperty("Instance", BindingFlags.Public | BindingFlags.Static)?.GetValue(null);
-        if (instance == null)
-        {
-            return RegistrationResult.NotReadyYet;
-        }
+            var pluginInterfaceType = injectorAssembly.GetType(PluginInterfaceTypeName, throwOnError: false);
+            if (pluginInterfaceType == null)
+            {
+                _logger.LogError(
+                    "Episode Limit 2.0: found the JavaScript Injector but not its PluginInterface type. " +
+                    "The installed injector version may predate the plugin interface. " +
+                    "Update JavaScript Injector from the catalog and restart Jellyfin.");
+                return RegistrationResult.Failed;
+            }
 
-        var provider = pluginType?.GetProperty("ServiceProvider", BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance)?.GetValue(instance) as IServiceProvider;
-        var serviceType = injectorAssembly.GetType(RegistrationServiceTypeName, throwOnError: false);
-        if (provider == null || serviceType == null)
-        {
-            return RegistrationResult.NotReadyYet;
-        }
+            var registerMethod = pluginInterfaceType.GetMethod("RegisterScript", BindingFlags.Public | BindingFlags.Static);
+            if (registerMethod == null)
+            {
+                _logger.LogError(
+                    "Episode Limit 2.0: the JavaScript Injector has no public static RegisterScript method. Version mismatch?");
+                return RegistrationResult.Failed;
+            }
 
-        var registrationService = provider.GetService(serviceType);
-        if (registrationService == null)
-        {
-            return RegistrationResult.NotReadyYet;
-        }
+            // The injector's documented JObject payload, camelCase field names.
+            var payload = new JObject
+            {
+                ["id"] = ScriptId,
+                ["name"] = "Episode Limit (moon button)",
+                ["src"] = ScriptSrc,
+                ["module"] = false,
+                ["enabled"] = true,
+                ["requiresAuthentication"] = false,
+                ["pluginId"] = PluginId,
+                ["pluginName"] = "Episode Limit",
+                ["pluginVersion"] = "2.0.0.1"
+            };
 
-        var payloadType = injectorAssembly.GetType(PayloadTypeName, throwOnError: false);
-        if (payloadType == null)
-        {
-            _logger.LogError("Episode Limit 2.0: found the JavaScript Injector but could not load its payload type. Version mismatch?");
+            var success = registerMethod.Invoke(null, new object[] { payload }) as bool?;
+            if (success == true)
+            {
+                _logger.LogInformation(
+                    "Episode Limit 2.0: registered {ScriptSrc} with the JavaScript Injector. " +
+                    "The moon button will appear in web clients after a browser refresh.",
+                    ScriptSrc);
+                return RegistrationResult.Success;
+            }
+
+            _logger.LogError(
+                "Episode Limit 2.0: the JavaScript Injector rejected the script registration (RegisterScript returned false). " +
+                "Check the injector's own log lines for the reason.");
             return RegistrationResult.Failed;
         }
-
-        var payload = Activator.CreateInstance(payloadType);
-        if (payload == null)
+        catch (TargetInvocationException tie) when (tie.InnerException is InvalidOperationException)
         {
+            // The injector throws this while its plugin instance is not ready yet.
+            return RegistrationResult.NotReadyYet;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Episode Limit 2.0: registering the UI script with the JavaScript Injector threw an exception.");
             return RegistrationResult.Failed;
         }
-
-        SetPayloadProperty(payloadType, payload, "Id", "episode-limit-moon-button");
-        SetPayloadProperty(payloadType, payload, "Name", "Episode Limit (moon button)");
-        SetPayloadProperty(payloadType, payload, "Src", "/EpisodeLimit/episodelimit.js");
-        SetPayloadProperty(payloadType, payload, "Enabled", true);
-        SetPayloadProperty(payloadType, payload, "Module", false);
-        SetPayloadProperty(payloadType, payload, "RequiresAuthentication", false);
-        SetPayloadProperty(payloadType, payload, "PluginId", "a1b2c3d4-e5f6-7890-abcd-ef1234567890");
-        SetPayloadProperty(payloadType, payload, "PluginName", "Episode Limit");
-        SetPayloadProperty(payloadType, payload, "PluginVersion", "2.0.0.0");
-
-        var registerMethod = serviceType.GetMethod("RegisterScript", new[] { payloadType });
-        var success = registerMethod?.Invoke(registrationService, new[] { payload }) as bool?;
-
-        if (success == true)
-        {
-            _logger.LogInformation(
-                "Episode Limit 2.0: registered episodelimit.js with the JavaScript Injector. The moon button will appear in web clients after a browser refresh.");
-            return RegistrationResult.Success;
-        }
-
-        _logger.LogError("Episode Limit 2.0: the JavaScript Injector rejected the script registration.");
-        return RegistrationResult.Failed;
     }
 
-    private static void SetPayloadProperty(Type payloadType, object payload, string name, object value)
+    private void TryUnregister()
     {
-        payloadType.GetProperty(name)?.SetValue(payload, value);
+        try
+        {
+            var injectorAssembly = FindInjectorAssembly();
+            var pluginInterfaceType = injectorAssembly?.GetType(PluginInterfaceTypeName, throwOnError: false);
+            var unregisterMethod = pluginInterfaceType?.GetMethod("UnregisterAllScriptsFromPlugin", BindingFlags.Public | BindingFlags.Static);
+            unregisterMethod?.Invoke(null, new object[] { PluginId });
+        }
+        catch
+        {
+            // Shutdown path: the injector may already be stopped. Nothing useful to do.
+        }
+    }
+
+    private static Assembly? FindInjectorAssembly()
+    {
+        // Jellyfin loads each plugin assembly into its own AssemblyLoadContext,
+        // so enumerate those first, then fall back to the AppDomain list.
+        var assembly = AssemblyLoadContext.All
+            .SelectMany(x => x.Assemblies)
+            .FirstOrDefault(a => string.Equals(a.GetName().Name, InjectorAssemblyName, StringComparison.OrdinalIgnoreCase));
+
+        if (assembly != null)
+        {
+            return assembly;
+        }
+
+        return AppDomain.CurrentDomain.GetAssemblies()
+            .FirstOrDefault(a => string.Equals(a.GetName().Name, InjectorAssemblyName, StringComparison.OrdinalIgnoreCase));
     }
 
     private enum RegistrationResult
