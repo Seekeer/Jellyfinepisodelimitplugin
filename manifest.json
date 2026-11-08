@@ -9,12 +9,12 @@
     "category": "General",
     "versions": [
       {
-     "version": "2.0.0.0",
-     "changelog": "v2.0.0.0 - per-user tracking (fixes silently broken counting), stop deduplication (fixes double-counting on Android), accurate log names, verified enforcement with retries, automatic script registration via the JavaScript Injector (install.sh retired). Requires the JavaScript Injector plugin.",
-     "targetAbi": "12.4.0.0",
-     "sourceUrl": "https://github.com/Wavey1975/Jellyfinepisodelimitplugin/releases/download/v2.0.0/EpisodeLimit-plugin.zip",
-     "checksum": "399477eab2237ef3a95a67a5246f233b",
-     "timestamp": "2026-11-08T00:00:00Z"
+  "version": "2.0.0.1",
+  "changelog": "v2.0.0.1 - the popup now stays open and shows the active timer after you choose a limit (close with OK), reopening the moon always shows the current state so you can cancel, edit or re-set it, server replies are read robustly (fixes the popup showing Inactive while a limit was stored), and the moon button now registers with the JavaScript Injector through its documented plugin interface (2.0.0.0's registration failed silently).",
+  "targetAbi": "12.4.0.0",
+  "sourceUrl": "https://github.com/Wavey1975/Jellyfinepisodelimitplugin/releases/download/v2.0.0.1/EpisodeLimit-plugin.zip",
+  "checksum": "MD5-OF-THE-NEW-ZIP",
+  "timestamp": "2026-11-08T15:00:00Z"
       }
     ]
   }
