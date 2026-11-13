@@ -1,5 +1,9 @@
 /**
- * Episode Limit Plugin - Player UI Integration (v2.0.0.1)
+ * Episode Limit Plugin - Player UI Integration (v2.0.1.0)
+ *
+ * v2.0.1.0: the official Android app now honours the limit with its
+ * default native player: server Stop is forwarded to the app's native
+ * bridge (see bindNativeStopBridge).
  * Adds a moon button to the video player controls that lets you set
  * how many episodes to play before automatically stopping.
  *
@@ -455,9 +459,70 @@
         });
     }
 
-    // Initialize when Jellyfin is ready
+    // ---- Android app: honour server-issued Stop in the native player ----
+    // The official Android app plays video in its native ExoPlayer by
+    // default. jellyfin-web never registers that player as the current one
+    // (ExoPlayerPlugin raises no playback events), so the server's
+    // Playstate "Stop" reaches playbackManager.stop() with no player and
+    // is silently dropped (Jellysleep issue #43). The web view keeps
+    // receiving websocket messages while the native player is on screen,
+    // so forward Stop to the app's native bridge ourselves. NativePlayer
+    // talks to the player over a rendezvous channel, so a Stop sent while
+    // nothing plays natively is discarded, never queued for later.
+    let boundApiClient = null;
+
+    function nativePlayerActive() {
+        const native = window.NativePlayer;
+        if (!native || typeof native.stopPlayer !== 'function') {
+            return false;
+        }
+        try {
+            return typeof native.isEnabled !== 'function' || native.isEnabled() === true;
+        } catch (err) {
+            return false;
+        }
+    }
+
+    function onServerMessage(e, msg) {
+        if (!msg || msg.MessageType !== 'Playstate' || !msg.Data || msg.Data.Command !== 'Stop') {
+            return;
+        }
+        if (!nativePlayerActive()) {
+            return;
+        }
+        try {
+            window.NativePlayer.stopPlayer();
+            console.log('Episode Limit: forwarded server Stop to the native player');
+        } catch (err) {
+            console.error('Episode Limit: native stop failed', err);
+        }
+    }
+
+    function bindNativeStopBridge() {
+        const apiClient = window.ApiClient;
+        if (!window.NativePlayer || !window.Events || !apiClient || apiClient === boundApiClient) {
+            return;
+        }
+        if (boundApiClient) {
+            window.Events.off(boundApiClient, 'message', onServerMessage);
+        }
+        window.Events.off(apiClient, 'message', onServerMessage);
+        window.Events.on(apiClient, 'message', onServerMessage);
+        boundApiClient = apiClient;
+        console.log('Episode Limit: native stop bridge bound');
+    }
+
+    // Initialize when Jellyfin is ready (once: 'viewshow' fires on every page)
+    let initialized = false;
     function init() {
+        if (initialized) {
+            return;
+        }
+        initialized = true;
         console.log('Episode Limit: Initializing player UI');
+        bindNativeStopBridge();
+        // The ApiClient is replaced on server switch or re-login; rebind.
+        document.addEventListener('viewshow', bindNativeStopBridge);
         setupObserver();
 
         // Also try to inject immediately if player is already visible

@@ -13,9 +13,9 @@
 
   <!-- Plugin metadata -->
   <PropertyGroup>
-    <AssemblyVersion>2.0.0.1</AssemblyVersion>
-    <FileVersion>2.0.0.1</FileVersion>
-    <Version>2.0.0.1</Version>
+    <AssemblyVersion>2.0.1.0</AssemblyVersion>
+    <FileVersion>2.0.1.0</FileVersion>
+    <Version>2.0.1.0</Version>
     <PackageId>Jellyfin.Plugin.EpisodeLimit</PackageId>
     <Description>Automatically stops playback after a specified number of episodes - perfect for falling asleep!</Description>
     <Authors>Wavey1975</Authors>

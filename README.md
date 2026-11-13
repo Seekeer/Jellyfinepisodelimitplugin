@@ -32,10 +32,9 @@ Upgrading from v1: remove any old index.html patch (the sed command from the v1 
 
 - ✅ Jellyfin Web in any browser (Firefox, Chrome, Safari): the moon works and the stop command is honoured.
 - ✅ Any client that honours server-issued playstate commands.
-- ❌ The official Jellyfin Android app: the button can appear in its embedded web view, but the app ignores server-issued stop commands ([Jellysleep issue #43](https://github.com/jon4hz/jellyfin-plugin-jellysleep/issues/43)), so the limit cannot be enforced there.
+- ✅ The official Jellyfin Android app (since 2.0.1.0, fork fix). With its default native player (ExoPlayer) the app used to ignore server-issued stop commands ([Jellysleep issue #43](https://github.com/jon4hz/jellyfin-plugin-jellysleep/issues/43)): jellyfin-web never registers ExoPlayer as the current player, so `Stop` reached `playbackManager.stop()` with no player and was dropped. The injected script now forwards `Stop` to the app's `NativePlayer` bridge. The moon button only shows in the web player; with the native player, set the limit from a browser or the web player (limits are per user). Not yet verified on a device.
 - ❌ Android TV and other native clients: no web UI, no button.
 
-For bedtime viewing, use a browser.
 
 ## Usage
 

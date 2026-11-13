@@ -1,12 +1,13 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.Loader;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Newtonsoft.Json.Linq;
 
 namespace Jellyfin.Plugin.EpisodeLimit.Services;
 
@@ -137,7 +138,22 @@ public class ScriptInjectorService : IHostedService
             }
 
             // The injector's documented JObject payload, camelCase field names.
-            var payload = new JObject
+            // Built through the injector's own JObject type (its parameter type),
+            // never a Newtonsoft.Json copy of ours: the injector ships its own
+            // Newtonsoft.Json, and a JObject from another load context would be a
+            // different type and fail the call.
+            var payloadType = registerMethod.GetParameters().FirstOrDefault()?.ParameterType;
+            var parseMethod = payloadType?.GetMethod(
+                "Parse", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(string) }, null);
+            if (parseMethod == null)
+            {
+                _logger.LogError(
+                    "Episode Limit 2.0: RegisterScript does not take a JObject payload (parameter type: {Type}). Version mismatch?",
+                    payloadType?.FullName ?? "none");
+                return RegistrationResult.Failed;
+            }
+
+            var payloadJson = JsonSerializer.Serialize(new Dictionary<string, object>
             {
                 ["id"] = ScriptId,
                 ["name"] = "Episode Limit (moon button)",
@@ -147,8 +163,9 @@ public class ScriptInjectorService : IHostedService
                 ["requiresAuthentication"] = false,
                 ["pluginId"] = PluginId,
                 ["pluginName"] = "Episode Limit",
-                ["pluginVersion"] = "2.0.0.1"
-            };
+                ["pluginVersion"] = "2.0.1.0"
+            });
+            var payload = parseMethod.Invoke(null, new object[] { payloadJson });
 
             var success = registerMethod.Invoke(null, new object[] { payload }) as bool?;
             if (success == true)
