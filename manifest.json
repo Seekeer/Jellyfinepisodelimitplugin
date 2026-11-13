@@ -7,7 +7,16 @@
     "owner": "Seekeer (fork of Wavey1975)",
     "imageUrl": "https://raw.githubusercontent.com/Seekeer/Jellyfinepisodelimitplugin/main/assets/icon.jpg",
     "category": "General",
-    "versions": []
+    "versions": [
+      {
+        "version": "2.0.1.0",
+        "changelog": "Android native player honours the limit (server Stop forwarded to ExoPlayer); built for Jellyfin 12.2",
+        "targetAbi": "12.2.0.0",
+        "sourceUrl": "https://github.com/Seekeer/Jellyfinepisodelimitplugin/releases/download/v2.0.1.0/EpisodeLimit_2.0.1.0.zip",
+        "checksum": "18a7a2fc4ba9a5429dce0d62976d324e",
+        "timestamp": "2026-11-13T06:30:24Z"
+      }
+    ]
   },
   {
     "guid": "f5a34f7b-2e8a-4e6a-a722-3a216a81b374",
