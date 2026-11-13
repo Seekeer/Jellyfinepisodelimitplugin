@@ -3,18 +3,28 @@
     "guid": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
     "name": "Episode Limit",
     "overview": "Stop playback after X files - perfect for falling asleep!",
-    "description": "Adds a bedtime button to the video player that lets you set how many files to play before automatically stopping. Works with episodes, movies, anything!",
-    "owner": "Wavey1975",
-    "imageUrl": "https://raw.githubusercontent.com/Wavey1975/Jellyfinepisodelimitplugin/main/assets/icon.jpg",
+    "description": "Adds a bedtime button to the video player that lets you set how many files to play before automatically stopping. Works with episodes, movies, anything! Fork by Seekeer: works with the native player of the official Android app.",
+    "owner": "Seekeer (fork of Wavey1975)",
+    "imageUrl": "https://raw.githubusercontent.com/Seekeer/Jellyfinepisodelimitplugin/main/assets/icon.jpg",
+    "category": "General",
+    "versions": []
+  },
+  {
+    "guid": "f5a34f7b-2e8a-4e6a-a722-3a216a81b374",
+    "name": "JavaScript Injector",
+    "overview": "Inject custom javascript(s) to the Jellyfin Web UI",
+    "description": "Inject custom javascript(s) to the Jellyfin Web UI",
+    "owner": "Seekeer (fork of n00bcodr)",
+    "imageUrl": "https://raw.githubusercontent.com/n00bcodr/jellyfin-javascript-injector/main/icon.png",
     "category": "General",
     "versions": [
       {
-  "version": "2.0.0.1",
-  "changelog": "v2.0.0.1 - the popup now stays open and shows the active timer after you choose a limit (close with OK), reopening the moon always shows the current state so you can cancel, edit or re-set it, server replies are read robustly (fixes the popup showing Inactive while a limit was stored), and the moon button now registers with the JavaScript Injector through its documented plugin interface (2.0.0.0's registration failed silently).",
-  "targetAbi": "12.4.0.0",
-  "sourceUrl": "https://github.com/Wavey1975/Jellyfinepisodelimitplugin/releases/download/v2.0.0.1/EpisodeLimit-plugin.zip",
-  "checksum": "a6e185b7dfe02fe42d557e9b0ee4f06a",
-  "timestamp": "2026-11-08T15:00:00Z"
+        "version": "4.1.0.0",
+        "changelog": "Build of upstream 4.1.0.0 from the Seekeer fork for Jellyfin 12.",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/Seekeer/Jellyfin-JavaScript-Injector/releases/download/v4.1.0.0/Jellyfin.Plugin.JavaScriptInjector_12.0.0.zip",
+        "checksum": "07dc4dbade8cd1568a706eae2a673428",
+        "timestamp": "2026-11-13T06:29:30Z"
       }
     ]
   }
