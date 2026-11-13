@@ -21,7 +21,7 @@ jobs:
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: '8.0.x'
+        dotnet-version: '10.0.x'
         
     - name: Restore dependencies
       run: dotnet restore
@@ -33,4 +33,4 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: EpisodeLimit-plugin
-        path: bin/Release/net8.0/Jellyfin.Plugin.EpisodeLimit.dll
+        path: bin/Release/net10.0/Jellyfin.Plugin.EpisodeLimit.dll
