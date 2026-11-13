@@ -70,6 +70,7 @@ public class PlaybackLimitService : IHostedService, IDisposable
         tracker.LastCountedItemId = Guid.Empty;
         tracker.LastCountedAt = DateTime.MinValue;
         tracker.ArmedAt = DateTime.MinValue;
+        tracker.LimitStoppedAt = DateTime.MinValue;
 
         _logger.LogInformation("Episode Limit: Set limit to {Limit} for user {UserId}", limit, userId);
 
@@ -190,6 +191,11 @@ public class PlaybackLimitService : IHostedService, IDisposable
             return;
         }
 
+        // Lets the client tell a limit stop (show the "The End" screen) from
+        // any other stop. Set before the first command so the client sees it
+        // when the Stop arrives.
+        tracker.LimitStoppedAt = DateTime.UtcNow;
+
         try
         {
             for (var attempt = 1; attempt <= MaxStopAttempts; attempt++)
@@ -251,7 +257,10 @@ public class PlaybackLimitService : IHostedService, IDisposable
         {
             Limit = tracker.Limit,
             EpisodesPlayed = tracker.EpisodesCompleted,
-            IsActive = tracker.IsActive
+            IsActive = tracker.IsActive,
+            LimitStoppedSecondsAgo = tracker.LimitStoppedAt == DateTime.MinValue
+                ? null
+                : (int)(DateTime.UtcNow - tracker.LimitStoppedAt).TotalSeconds
         };
     }
 
@@ -273,6 +282,7 @@ public class PlaybackLimitService : IHostedService, IDisposable
         public DateTime ArmedAt { get; set; }
         public Guid LastCountedItemId { get; set; }
         public DateTime LastCountedAt { get; set; }
+        public DateTime LimitStoppedAt { get; set; }
         public int Enforcing;
     }
 
@@ -284,5 +294,8 @@ public class PlaybackLimitService : IHostedService, IDisposable
         public int Limit { get; set; }
         public int EpisodesPlayed { get; set; }
         public bool IsActive { get; set; }
+
+        /// <summary>Seconds since playback was last stopped by the limit; null if never.</summary>
+        public int? LimitStoppedSecondsAgo { get; set; }
     }
 }

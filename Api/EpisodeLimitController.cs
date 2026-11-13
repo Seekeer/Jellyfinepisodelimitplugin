@@ -54,7 +54,8 @@ public class EpisodeLimitController : ControllerBase
         {
             Limit = result.Limit,
             EpisodesPlayed = result.EpisodesPlayed,
-            IsActive = result.IsActive
+            IsActive = result.IsActive,
+            LimitStoppedSecondsAgo = result.LimitStoppedSecondsAgo
         });
     }
 
@@ -76,7 +77,8 @@ public class EpisodeLimitController : ControllerBase
         {
             Limit = result.Limit,
             EpisodesPlayed = result.EpisodesPlayed,
-            IsActive = result.IsActive
+            IsActive = result.IsActive,
+            LimitStoppedSecondsAgo = result.LimitStoppedSecondsAgo
         });
     }
 
@@ -151,4 +153,8 @@ public class EpisodeLimitResponse
 
     /// <summary>Whether the limit is currently active.</summary>
     public bool IsActive { get; set; }
+
+    /// <summary>Seconds since playback was last stopped by the limit; null if never.
+    /// The player script uses it to show the "The End" screen after a limit stop.</summary>
+    public int? LimitStoppedSecondsAgo { get; set; }
 }

@@ -163,7 +163,7 @@ public class ScriptInjectorService : IHostedService
                 ["requiresAuthentication"] = false,
                 ["pluginId"] = PluginId,
                 ["pluginName"] = "Episode Limit",
-                ["pluginVersion"] = "2.0.1.0"
+                ["pluginVersion"] = "2.1.0.0"
             });
             var payload = parseMethod.Invoke(null, new object[] { payloadJson });
 

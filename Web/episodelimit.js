@@ -1,5 +1,8 @@
 /**
- * Episode Limit Plugin - Player UI Integration (v2.0.1.0)
+ * Episode Limit Plugin - Player UI Integration (v2.1.0.0)
+ *
+ * v2.1.0.0: when the limit stops playback, the device that was playing
+ * shows a full-screen "Конец" (The End) picture; tap to close.
  *
  * v2.0.1.0: the official Android app now honours the limit with its
  * default native player: server Stop is forwarded to the app's native
@@ -487,6 +490,7 @@
         if (!msg || msg.MessageType !== 'Playstate' || !msg.Data || msg.Data.Command !== 'Stop') {
             return;
         }
+        scheduleEndScreenCheck();
         if (!nativePlayerActive()) {
             return;
         }
@@ -498,9 +502,146 @@
         }
     }
 
+    // ---- "The End" screen ----
+    // After a Stop, ask the server whether the limit caused it (the server
+    // records when it enforced the limit). Only the session that was playing
+    // receives the Stop, so the screen appears on that device alone.
+    const END_SCREEN_WINDOW_SECONDS = 120;
+    const END_SCREEN_CHECK_DELAY_MS = 1500;
+    let endScreenCheckTimer = null;
+    let endScreenShownAt = 0;
+
+    function scheduleEndScreenCheck() {
+        if (endScreenCheckTimer) {
+            return;
+        }
+        endScreenCheckTimer = setTimeout(async function () {
+            endScreenCheckTimer = null;
+            try {
+                const response = await ApiClient.fetch({
+                    url: ApiClient.getUrl('EpisodeLimit/Status'),
+                    type: 'GET'
+                });
+                let data = response;
+                if (data && typeof data.json === 'function') {
+                    data = await data.json();
+                }
+                const ago = data ? (data.LimitStoppedSecondsAgo !== undefined ? data.LimitStoppedSecondsAgo : data.limitStoppedSecondsAgo) : null;
+                if (ago !== null && ago !== undefined && Number(ago) <= END_SCREEN_WINDOW_SECONDS
+                    && Date.now() - endScreenShownAt > END_SCREEN_WINDOW_SECONDS * 1000) {
+                    showEndScreen();
+                }
+            } catch (err) {
+                console.error('Episode Limit: could not check for the end screen', err);
+            }
+        }, END_SCREEN_CHECK_DELAY_MS);
+    }
+
+    // Background (sky, stars, hills, a house with a lit window) fills any
+    // screen shape; the moon and the title sit in a centred layer that
+    // always fits, portrait phones included.
+    const END_SCREEN_SVG = `
+<svg class="elBg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+  <defs>
+    <linearGradient id="elSky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0b1a3a"/>
+      <stop offset="0.6" stop-color="#27407a"/>
+      <stop offset="1" stop-color="#6b5b9a"/>
+    </linearGradient>
+  </defs>
+  <rect width="800" height="600" fill="url(#elSky)"/>
+  <g fill="#fffbe8">
+    <circle cx="80" cy="70" r="2"/><circle cx="160" cy="140" r="1.5"/><circle cx="250" cy="60" r="2.2"/>
+    <circle cx="330" cy="120" r="1.4"/><circle cx="420" cy="50" r="1.8"/><circle cx="470" cy="160" r="1.3"/>
+    <circle cx="700" cy="230" r="1.6"/><circle cx="60" cy="230" r="1.5"/><circle cx="210" cy="250" r="1.2"/>
+    <circle cx="760" cy="60" r="1.7"/><circle cx="380" cy="230" r="1.3"/><circle cx="120" cy="320" r="1.2"/>
+    <circle class="elTwinkle" cx="300" cy="180" r="2.4"/><circle class="elTwinkle" cx="560" cy="90" r="2.4"/>
+    <circle class="elTwinkle" cx="40" cy="150" r="2.2"/>
+  </g>
+  <path d="M0 470 Q160 400 330 455 T640 440 T800 430 V600 H0 Z" fill="#2a2f63"/>
+  <path d="M0 520 Q200 470 400 515 T800 500 V600 H0 Z" fill="#1c2048"/>
+  <g fill="#ffd36e">
+    <rect x="150" y="470" width="40" height="34" rx="3" fill="#3a3f7a"/>
+    <path d="M144 472 L170 450 L196 472 Z" fill="#4a4f8f"/>
+    <rect x="163" y="480" width="14" height="12" rx="2"/>
+  </g>
+</svg>
+<div class="elCenter">
+  <svg class="elMoon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" aria-hidden="true">
+    <defs>
+      <radialGradient id="elMoonGlow" cx="0.5" cy="0.5" r="0.5">
+        <stop offset="0" stop-color="#fff7d6" stop-opacity="0.5"/>
+        <stop offset="1" stop-color="#fff7d6" stop-opacity="0"/>
+      </radialGradient>
+      <mask id="elCrescent">
+        <rect width="200" height="200" fill="#fff"/>
+        <circle cx="126" cy="80" r="50" fill="#000"/>
+      </mask>
+    </defs>
+    <circle cx="100" cy="100" r="98" fill="url(#elMoonGlow)"/>
+    <circle cx="100" cy="100" r="56" fill="#fff3c4" mask="url(#elCrescent)"/>
+  </svg>
+  <div class="elTitle">Конец</div>
+</div>`;
+
+    function showEndScreen() {
+        if (document.getElementById('episodeLimitEndScreen')) {
+            return;
+        }
+        endScreenShownAt = Date.now();
+        hideDialog();
+
+        if (!document.getElementById('episodeLimitEndScreenStyle')) {
+            const style = document.createElement('style');
+            style.id = 'episodeLimitEndScreenStyle';
+            style.textContent = `
+                #episodeLimitEndScreen {
+                    position: fixed; inset: 0; z-index: 100000;
+                    background: #0b1a3a; cursor: pointer;
+                    opacity: 0; transition: opacity 1.2s ease;
+                }
+                #episodeLimitEndScreen.visible { opacity: 1; }
+                #episodeLimitEndScreen .elBg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+                #episodeLimitEndScreen .elCenter {
+                    position: absolute; inset: 0; padding-bottom: 14vh;
+                    display: flex; flex-direction: column; align-items: center; justify-content: center;
+                }
+                #episodeLimitEndScreen .elMoon { width: min(34vw, 30vh); height: min(34vw, 30vh); }
+                #episodeLimitEndScreen .elTitle {
+                    margin-top: -2vh; color: #fff3c4; letter-spacing: 0.04em;
+                    font: 700 min(20vw, 22vh)/1 Georgia, 'Times New Roman', serif;
+                    text-shadow: 0 0 24px rgba(255, 243, 196, 0.35);
+                }
+                #episodeLimitEndScreen .elTwinkle { animation: elTwinkle 2.4s ease-in-out infinite; }
+                #episodeLimitEndScreen .elTwinkle:nth-of-type(2n) { animation-delay: 1.2s; }
+                @keyframes elTwinkle { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+                #episodeLimitEndScreen .elClose {
+                    position: absolute; right: 16px; top: 16px;
+                    padding: 8px 18px; border: 0; border-radius: 20px;
+                    background: rgba(255,255,255,0.15); color: #fff3c4;
+                    font-size: 16px; cursor: pointer;
+                }
+            `;
+            document.head.appendChild(style);
+        }
+
+        const screen = document.createElement('div');
+        screen.id = 'episodeLimitEndScreen';
+        screen.setAttribute('role', 'dialog');
+        screen.setAttribute('aria-label', 'Конец');
+        screen.innerHTML = END_SCREEN_SVG + '<button type="button" class="elClose">OK</button>';
+        screen.addEventListener('click', function () {
+            screen.classList.remove('visible');
+            setTimeout(function () { screen.remove(); }, 400);
+        });
+        document.body.appendChild(screen);
+        requestAnimationFrame(function () { screen.classList.add('visible'); });
+        console.log('Episode Limit: showing the end screen');
+    }
+
     function bindNativeStopBridge() {
         const apiClient = window.ApiClient;
-        if (!window.NativePlayer || !window.Events || !apiClient || apiClient === boundApiClient) {
+        if (!window.Events || !apiClient || apiClient === boundApiClient) {
             return;
         }
         if (boundApiClient) {

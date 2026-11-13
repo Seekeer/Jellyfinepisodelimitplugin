@@ -43,6 +43,7 @@ While playing, tap the 🌙 button:
 - Custom: any number from 1 to 100.
 - The status line shows the limit and progress. The button turns green while a limit is active.
 - When the limit is reached, the next item is stopped a moment after it starts, and the limit resets. Set it again each night.
+- The device that was playing then shows a full-screen night-sky picture with the word «Конец» (The End). Tap anywhere to close it. Other stops (you pressing stop, an episode ending without a limit) never show it.
 
 Limits are per-user: set it on your phone's browser, it applies to every client you are signed into.
 
