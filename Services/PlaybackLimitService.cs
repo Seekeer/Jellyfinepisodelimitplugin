@@ -23,6 +23,7 @@ public class PlaybackLimitService : IHostedService, IDisposable
     private static readonly TimeSpan VerifyDelay = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan DedupWindow = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan StaleArmExpiry = TimeSpan.FromMinutes(30);
+    private static readonly TimeSpan EnforceCooldown = TimeSpan.FromSeconds(30);
 
     private readonly ISessionManager _sessionManager;
     private readonly ILogger<PlaybackLimitService> _logger;
@@ -40,6 +41,7 @@ public class PlaybackLimitService : IHostedService, IDisposable
     public Task StartAsync(CancellationToken cancellationToken)
     {
         _sessionManager.PlaybackStart += OnPlaybackStart;
+        _sessionManager.PlaybackProgress += OnPlaybackProgress;
         _sessionManager.PlaybackStopped += OnPlaybackStopped;
 
         _logger.LogInformation("Episode Limit 2.0: playback monitoring started (per-user tracking)");
@@ -50,6 +52,7 @@ public class PlaybackLimitService : IHostedService, IDisposable
     public Task StopAsync(CancellationToken cancellationToken)
     {
         _sessionManager.PlaybackStart -= OnPlaybackStart;
+        _sessionManager.PlaybackProgress -= OnPlaybackProgress;
         _sessionManager.PlaybackStopped -= OnPlaybackStopped;
 
         _logger.LogInformation("Episode Limit 2.0: service stopped");
@@ -71,6 +74,7 @@ public class PlaybackLimitService : IHostedService, IDisposable
         tracker.LastCountedAt = DateTime.MinValue;
         tracker.ArmedAt = DateTime.MinValue;
         tracker.LimitStoppedAt = DateTime.MinValue;
+        tracker.LastEnforceAt = DateTime.MinValue;
 
         _logger.LogInformation("Episode Limit: Set limit to {Limit} for user {UserId}", limit, userId);
 
@@ -118,16 +122,40 @@ public class PlaybackLimitService : IHostedService, IDisposable
             "Episode Limit: Playing item {Current}/{Limit} - {ItemName}",
             tracker.EpisodesCompleted + 1, tracker.Limit, itemName);
 
-        if (!tracker.StopArmed)
+        MaybeEnforce(tracker, e, "start");
+    }
+
+    // Clients report the previous item's stop and the next item's start
+    // back to back. The server finishes the stop (saving watched state)
+    // after the start, so on autoplay the next item's PlaybackStart usually
+    // arrives before the limit is armed. Progress reports (every few
+    // seconds while playing) catch that item a moment later.
+    private void OnPlaybackProgress(object? sender, PlaybackProgressEventArgs e)
+    {
+        if (_userTrackers.TryGetValue(e.Session.UserId, out var tracker) && tracker.IsActive)
+        {
+            MaybeEnforce(tracker, e, "progress");
+        }
+    }
+
+    private void MaybeEnforce(UserTracker tracker, PlaybackProgressEventArgs e, string trigger)
+    {
+        if (!tracker.StopArmed || e.Item == null)
         {
             return;
         }
 
-        // A limit was reached on the previous item. If the arm is stale
-        // (nothing played for a while, e.g. the user fell asleep and the
-        // client ignored our stop), discard it so it never ambushes a
-        // future session.
-        if (DateTime.UtcNow - tracker.ArmedAt > StaleArmExpiry)
+        // Late progress from the item that reached the limit is not "the next item".
+        if (e.Item.Id == tracker.LastCountedItemId)
+        {
+            return;
+        }
+
+        // If the arm is stale (nothing played for a while, e.g. the user fell
+        // asleep and the client ignored our stop), discard it so it never
+        // ambushes a future session.
+        var now = DateTime.UtcNow;
+        if (now - tracker.ArmedAt > StaleArmExpiry)
         {
             tracker.StopArmed = false;
             tracker.ArmedAt = DateTime.MinValue;
@@ -135,9 +163,20 @@ public class PlaybackLimitService : IHostedService, IDisposable
             return;
         }
 
-        // Enforce: stop this new session, verify it actually stopped,
-        // retry if ignored. Fire and forget; never block the event thread.
-        _ = EnforceStopAsync(tracker, e.Session.Id, userId, itemName);
+        // One enforcement round at a time; progress arrives every few seconds.
+        if (now - tracker.LastEnforceAt < EnforceCooldown)
+        {
+            return;
+        }
+
+        tracker.LastEnforceAt = now;
+        _logger.LogInformation(
+            "Episode Limit: Limit reached, stopping {ItemName} (on playback {Trigger}).",
+            e.Item.Name ?? "Unknown", trigger);
+
+        // Enforce: stop this session, verify it actually stopped, retry if
+        // ignored. Fire and forget; never block the event thread.
+        _ = EnforceStopAsync(tracker, e.Session.Id, e.Session.UserId, e.Item.Name ?? "Unknown");
     }
 
     private void OnPlaybackStopped(object? sender, PlaybackStopEventArgs e)
@@ -283,6 +322,7 @@ public class PlaybackLimitService : IHostedService, IDisposable
         public Guid LastCountedItemId { get; set; }
         public DateTime LastCountedAt { get; set; }
         public DateTime LimitStoppedAt { get; set; }
+        public DateTime LastEnforceAt { get; set; }
         public int Enforcing;
     }
 

@@ -37,7 +37,7 @@ Upgrading from v1: remove any old index.html patch (the sed command from the v1 
 
 ## Usage
 
-While playing, tap the 🌙 button:
+Tap the 🌙 button next to ▶ Play on a series, season or episode page (works in the Android app too, whatever player it uses), or in the web player controls while playing:
 
 - Quick buttons: Off, 1, 2, 3, 4 or 5 items.
 - Custom: any number from 1 to 100.

@@ -1,5 +1,5 @@
 /**
- * Episode Limit Plugin - Player UI Integration (v2.1.0.0)
+ * Episode Limit Plugin - Player UI Integration (v2.2.0.0)
  *
  * v2.1.0.0: when the limit stops playback, the device that was playing
  * shows a full-screen "Конец" (The End) picture; tap to close.
@@ -341,6 +341,64 @@
         if (button) {
             button.classList.toggle('limitActive', isActive && currentLimit > 0);
         }
+        document.querySelectorAll('.btnEpisodeLimitDetail').forEach(function (btn) {
+            btn.classList.toggle('limitActive', isActive && currentLimit > 0);
+        });
+    }
+
+    // ---- Moon button next to "Play" on item detail pages ----
+    // Set the limit before starting a series or an episode. This also works
+    // in the Android app with its native player, which has no web player
+    // controls to put the moon in.
+    function createDetailButton() {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'button-flat detailButton btnEpisodeLimitDetail';
+        button.title = 'Episode Limit';
+        button.innerHTML = '<div class="detailButton-content">' +
+            '<span class="material-icons detailButton-icon" aria-hidden="true">bedtime</span></div>';
+        button.addEventListener('click', showLimitDialog);
+        return button;
+    }
+
+    function injectDetailButtons() {
+        let injected = false;
+        document.querySelectorAll('.mainDetailButtons').forEach(function (container) {
+            if (container.querySelector('.btnEpisodeLimitDetail')) {
+                return;
+            }
+            const play = container.querySelector('.btnPlay');
+            if (!play) {
+                return;
+            }
+            play.insertAdjacentElement('afterend', createDetailButton());
+            injected = true;
+        });
+        if (injected) {
+            ensureStyles();
+            fetchStatus();
+        }
+    }
+
+    function ensureStyles() {
+        if (document.getElementById('episodeLimitDetailStyle')) {
+            return;
+        }
+        const style = document.createElement('style');
+        style.id = 'episodeLimitDetailStyle';
+        style.textContent = '.btnEpisodeLimitDetail.limitActive .detailButton-icon { color: #4caf50 !important; }';
+        document.head.appendChild(style);
+    }
+
+    let detailInjectTimer = null;
+    function scheduleDetailInject() {
+        if (detailInjectTimer) {
+            return;
+        }
+        detailInjectTimer = setTimeout(function () {
+            detailInjectTimer = null;
+            injectDetailButtons();
+        }, 300);
     }
 
     // Fetch current status from API
@@ -440,6 +498,7 @@
         const observer = new MutationObserver(function(mutations) {
             mutations.forEach(function(mutation) {
                 if (mutation.addedNodes.length) {
+                    scheduleDetailInject();
                     // Check if video player appeared
                     if (document.querySelector('.videoOsdBottom')) {
                         setTimeout(injectButton, 500); // Small delay for controls to fully render
@@ -664,6 +723,8 @@
         bindNativeStopBridge();
         // The ApiClient is replaced on server switch or re-login; rebind.
         document.addEventListener('viewshow', bindNativeStopBridge);
+        document.addEventListener('viewshow', scheduleDetailInject);
+        scheduleDetailInject();
         setupObserver();
 
         // Also try to inject immediately if player is already visible
