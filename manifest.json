@@ -9,6 +9,14 @@
     "category": "General",
     "versions": [
       {
+        "version": "2.2.0.0",
+        "changelog": "Reliable stop on autoplay; moon button next to Play",
+        "targetAbi": "12.2.0.0",
+        "sourceUrl": "https://github.com/Seekeer/Jellyfinepisodelimitplugin/releases/download/v2.2.0.0/EpisodeLimit_2.2.0.0.zip",
+        "checksum": "3ee31ec88dea43d09d883dee6600deea",
+        "timestamp": "2026-11-16T21:57:57Z"
+      },
+      {
         "version": "2.1.0.0",
         "changelog": "Конец screen after the limit stops playback",
         "targetAbi": "12.2.0.0",
