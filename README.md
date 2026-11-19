@@ -18,7 +18,7 @@ Meanwhile, nothing available did the one thing I actually wanted at 1am: *stop a
 
 v2 needs the JavaScript Injector plugin. There is no install.sh and no index.html patching any more, and the button survives Jellyfin updates.
 
-1. Go to **Dashboard → Plugins → Repositories** (in newer versions: Plugins, Catalog, ⚙️) and add this fork's catalog. It lists both plugins, built by this fork's GitHub Actions for Jellyfin 12.2+:
+1. Go to **Dashboard → Plugins → Repositories** (in newer versions: Plugins, Catalog, ⚙️) and add this fork's catalog. It lists the plugins, built by this fork's GitHub Actions for Jellyfin 12.2+:
    - `https://raw.githubusercontent.com/Seekeer/Jellyfinepisodelimitplugin/main/manifest.json`
 2. In **Plugins → Catalog**, install **JavaScript Injector**.
 3. Install **Episode Limit**.
@@ -55,3 +55,7 @@ Limits are per-user: set it on your phone's browser, it applies to every client 
 ## License
 
 MIT, same as v1.
+
+## MP2 Audio Compatibility
+
+This repository also hosts [MP2 Audio Compatibility](plugins/Jellyfin.Mp2Compatibility/README.md), an independent plugin that removes the incorrect MP2 compatibility claim in the verified Jellyfin Web 12.2 bundle. Install it through the same catalog above. It needs no JavaScript Injector and leaves media files unchanged.

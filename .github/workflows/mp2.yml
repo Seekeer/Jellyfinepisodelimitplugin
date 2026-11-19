@@ -1,0 +1,34 @@
+name: MP2 Audio Compatibility
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'plugins/Jellyfin.Mp2Compatibility/**'
+      - 'plugins/Jellyfin.Mp2Compatibility.Tests/**'
+      - '.github/workflows/mp2.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'plugins/Jellyfin.Mp2Compatibility/**'
+      - 'plugins/Jellyfin.Mp2Compatibility.Tests/**'
+      - '.github/workflows/mp2.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test trusted Web fixture and package plugin
+        run: bash plugins/Jellyfin.Mp2Compatibility/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MP2-Audio-Compatibility
+          path: |
+            artifacts/jellyfin-mp2/*.zip
+            artifacts/jellyfin-mp2/*SUMS
+          if-no-files-found: error

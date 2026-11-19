@@ -33,6 +33,13 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
+  <!-- Keep independently built plugins and tests out of Episode Limit. -->
+  <ItemGroup>
+    <Compile Remove="plugins/**/*.cs" />
+    <EmbeddedResource Remove="plugins/**/*" />
+    <None Remove="plugins/**/*" />
+  </ItemGroup>
+
   <!-- Embed resources -->
   <ItemGroup>
     <EmbeddedResource Include="Configuration\configPage.html" />
